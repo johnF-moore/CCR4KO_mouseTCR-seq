@@ -1,0 +1,83 @@
+---
+title: "Does wilcoxon rank-sum test find differentially expressed TCRs?"
+format: html
+editor: visual
+---
+
+```{r setup, include= FALSE}
+knitr::opts_chunk$set(echo = F)
+library(ggplot2)
+library(dplyr)
+library(here)
+library(data.table)
+```
+
+```{r}
+lev_pablo_path= here("data/filt_TCR_data/leventhal_2016_wCCR4.csv")
+test <- fread(lev_pablo_path)
+```
+
+```{r}
+df= test
+group1= "Batf3_pos"
+group2= "Batf3_neg"
+
+wilcox_DE <- function(df, group1, group2,filt_method, overlap, counts,
+                      aa_len_min= 7, aa_len_max= 17){
+  if(!"X" %in% colnames(df)){
+    stop("CDR3 aa column must be names 'X'")
+  }
+  df <- as.data.frame(df)
+  groups_df <- df %>% select(X, contains(group1), contains(group2))
+  other_df <- df[,!grepl(paste0(group1, "|", group2),colnames(df))]
+  colnames(other_df)[-1] <- paste0(colnames(other_df)[-1], "_raw")
+  
+  groups_df$X <- as.character(groups_df$X)
+  ## Where X is the CDR3 alpha aa sequencess 
+  ## and each column of reads contains the cell type in the sample name/column name
+  groups_df <- groups_df[nchar(groups_df$X) > aa_len_min & 
+                         nchar(groups_df$X) < aa_len_max,]
+  ## Filtering for sequences that make biological sense.
+  
+  X <- groups_df$X ## Used later, but has to be pulled out before filtering.
+  
+  ## cpm normalization for filtering samples
+  cpm1 <- as.data.frame(cpm(y= groups_df[-1]))
+  counts <- counts/1e6
+  
+  if(filt_method == "phenotypewise"){
+    groups_df <- groups_df[(rowSums(dplyr::select(cpm1, contains(group1)) >= counts) >= overlap |
+                            rowSums(dplyr::select(cpm1, contains(group2)) >= counts) >= overlap),]
+    ## CDR3 aa will always be 1st column b/c of dplyr::select above.
+  } else if(filt_method == "IMPACC") {
+    groups_df <- groups_df[rowSums(groups_df[-1] > 0) >= overlap,]
+  } else if(filt_method == "AvgLogCPM"){
+    groups_df <- groups_df[aveLogCPM(y= groups_df[-1]) > log2_count &
+                           rowSums(groups_df[-1] > 0)  >= overlap,]
+  } else if(filt_method == "by_cellType"){
+    groups_df <- groups_df[rowSums(cpm1 >= counts) >= overlap,]
+  } else if(filt_method == "none"){
+    warning("No Filtering Done")
+  }
+  groups_df[-1] <- cpm(groups_df[-1])
+  rows= nrow(groups_df)
+  p_vals= vector(mode= "numeric", length= rows)
+  
+  for(row in 1:rows){
+    g1_vals= groups_df[row,] %>% select(contains(group1)) %>% pull()
+    g2_vals= groups_df[row,] %>% select(contains(group2)) %>% pull()
+    
+    p_vals[row]= wilcox.test(x= g1_vals, y= g2_vals)$p.value
+  }
+  groups_df <- groups_df %>% mutate(p.adj= p.adjust(p= p_vals, method= "BH",n= rows))
+  
+  return(groups_df)
+} 
+## Lauren will probably want me to add the counts for the other samples to the output df
+## She'll also probably want a logFC
+## I don't really need to go ahead with that b/c none of the TCRs are DE by wilcox, which makes sense. It has very little power. 
+## Even if I compare Batf3_pos and TconvCCR4KO, there's no difference. 
+## I tried Batf3_pos against Batf3_neg 
+
+## Wilcox test is not the move, library normalization or no.
+```

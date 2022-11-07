@@ -1,0 +1,118 @@
+---
+title: "VJ-uCDR3 Gene Usage Comparison"
+format: html
+editor: visual
+---
+
+```{r setup, include= FALSE}
+knitr::opts_chunk$set(echo= FALSE)
+library(ggplot2)
+library(dplyr)
+library(here)
+library(readr)
+source(paste0("/stor/work/Ehrlich/Users/John/projects/mouse_TCRseq/",
+              "scripts/john_analysis/VDJ_usage/",
+              "vdj_gene_comparison_functions.R"))
+```
+
+## Loading Data 
+```{r}
+data_path= "/stor/work/Ehrlich/mouse_TCRseq/data/gene_usage/"
+norm_v <- read_csv(paste0(data_path,"norm_v_usage_w_metadata.csv"), show_col_types= FALSE)
+norm_j <- read_csv(paste0(data_path,"norm_j_usage_w_metadata.csv"), show_col_types= FALSE)
+```
+
+
+## V gene comparisons
+
+**Wilcoxon Rank-Sum Test**
+```{r}
+wide_v <- norm_v %>% 
+  pivot_wider(id_cols= "gene",
+              names_from=c("samples","phenotype","cell_type"),
+              values_from="score")
+
+Treg_v_wilcox  <- widyr_wilcox(df= wide_v, group1= "WT_Treg",  group2= "CCR4KO_Treg")
+Tconv_v_wilcox <- widyr_wilcox(df= wide_v, group1= "WT_Tconv", group2= "CCR4KO_Tconv")
+
+table(Treg_v_wilcox,  useNA = "always")
+table(Tconv_v_wilcox, useNA = "always")
+```
+
+**Fisher's Exact Test**
+```{r}
+fisher_v <- fisher_data_prep(df= norm_v, gene_col= "gene",
+                             names_from= c("samples","phenotype","cell_type"), 
+                             values_from= "score")
+
+Treg_v_fisher  <- widyr_fisher(df= fisher_v, group1= "WT_Treg",  group2= "CCR4KO_Treg")
+Tconv_v_fisher <- widyr_fisher(df= fisher_v, group1= "WT_Tconv", group2= "CCR4KO_Tconv")
+
+table(Treg_v_fisher,  useNA = "always")
+table(Tconv_v_fisher, useNA = "always")
+```
+
+## V gene subgroup comparisons
+
+**Wilcoxon Rank-Sum Test**
+```{r}
+norm_v <- norm_v %>% 
+  mutate(subgroup= gsub("(\\w+\\d+).*","\\1", gene_family)) %>% 
+  group_by(subgroup, samples) %>% 
+  mutate(subgroup_prop= sum(score)) %>% 
+  ungroup() 
+wide_sub <- norm_v %>% 
+  distinct(subgroup, samples, phenotype, cell_type, subgroup_prop) %>%
+  pivot_wider(id_cols= "subgroup",
+              names_from=c("cell_type","phenotype", "samples"),
+              values_from="subgroup_prop")
+
+Treg_sub_wilcox  <- widyr_wilcox(df= wide_sub, group1= "Treg_WT",  group2= "Treg_CCR4KO")
+Tconv_sub_wilcox <- widyr_wilcox(df= wide_sub, group1= "Tconv_WT", group2= "Tconv_CCR4KO")
+
+table(Treg_sub_wilcox,  useNA = "always")
+table(Tconv_sub_wilcox, useNA = "always")
+```
+
+**Fisher's Exact Test**
+```{r}
+fisher_sub <- fisher_data_prep(df= norm_v, gene_col= "subgroup",
+                             names_from= c("cell_type", "phenotype", "samples"), 
+                             values_from= "subgroup_prop")
+
+Treg_sub_fisher  <- widyr_fisher(df= fisher_sub, group1= "Treg_WT",  group2= "Treg_CCR4KO")
+Tconv_sub_fisher <- widyr_fisher(df= fisher_sub, group1= "Tconv_WT", group2= "Tconv_CCR4KO")
+
+table(Treg_sub_fisher,  useNA = "always")
+table(Tconv_sub_fisher, useNA = "always")
+```
+
+## J gene comparisons
+
+**Wilcoxon Rank-Sum Test**
+```{r}
+wide_j <- norm_j %>% 
+  pivot_wider(id_cols= "gene",
+              names_from=c("samples","phenotype","cell_type"),
+              values_from="score")
+
+Treg_j_wilcox  <- widyr_wilcox(df= wide_j, group1= "WT_Treg",  group2= "CCR4KO_Treg")
+Tconv_j_wilcox <- widyr_wilcox(df= wide_v, group1= "WT_Tconv", group2= "CCR4KO_Tconv")
+
+table(Treg_j_wilcox,  useNA= "always")
+table(Tconv_j_wilcox, useNA= "always")
+```
+
+**Fisher's Exact Test**
+```{r}
+fisher_v <- fisher_data_prep(df= norm_v, gene_col= "gene",
+                             names_from= c("samples","phenotype","cell_type"), 
+                             values_from= "score")
+
+Treg_j_fisher  <- widyr_fisher(df= fisher_v, group1= "WT_Treg",  group2= "CCR4KO_Treg") 
+Tconv_j_fisher <- widyr_fisher(df= fisher_v, group1= "WT_Tconv", group2= "CCR4KO_Tconv") 
+
+table(Treg_j_fisher,  useNA= "always")
+table(Tconv_j_fisher, useNA= "always")
+```
+

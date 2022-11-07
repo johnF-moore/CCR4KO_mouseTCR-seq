@@ -1,0 +1,231 @@
+---
+title: "Comparing Gene Usage with raw reads"
+format: html
+editor: visual
+---
+```{r setup, include= FALSE}
+knitr::opts_chunk$set(echo= FALSE)
+library(ggplot2)
+library(dplyr)
+library(here)
+library(readr)
+source(paste0("/stor/work/Ehrlich/Users/John/projects/mouse_TCRseq/",
+              "scripts/john_analysis/VDJ_usage/",
+              "vdj_gene_comparison_functions.R"))
+source(here("scripts/public_scripts/DE_source_functions.R"))
+## Any differentially expressed genes will have to be taken with a grain of salt b/c
+## comparing_VJuCDR3_normalized_gene_usage.qmd did not find any DE using wilcox or fisher.
+## This could be more of a sample size issue than anything. 
+```
+
+## Loading Raw Reads 
+```{r, eval= FALSE}
+data_path= "/stor/work/Ehrlich/mouse_TCRseq/data/gene_usage/"
+vj_reads <- read_csv(paste0(data_path,"vj_reads_w_metadata.csv"), show_col_types= FALSE)
+
+## V genes
+v_reads <- vj_reads %>% 
+  select(-j_gene) %>% 
+  group_by(v_gene, samples) %>%
+  mutate(sum_gene_reads= sum(reads)) %>% 
+  group_by(v_subgroup, samples) %>% 
+  mutate(sum_subgroup_reads= sum(reads)) %>% 
+  ungroup()
+
+v_gene_reads <- v_reads %>% 
+  distinct(v_gene, cell_type, phenotype, samples, sum_gene_reads) %>% 
+  pivot_wider(id_cols= "v_gene",
+              names_from= c("cell_type","phenotype","samples"),
+              values_from= "sum_gene_reads") %>% 
+  mutate(across(colnames(.)[-1], ~replace_na(.x,0))) %>% 
+  rename(X= v_gene)
+write_csv(v_gene_reads, paste0(data_path, "raw_v_gene_reads.csv"))
+
+v_subgroup_reads <- v_reads %>% 
+  distinct(v_subgroup, cell_type, phenotype, samples, sum_subgroup_reads) %>% 
+  pivot_wider(id_cols= "v_subgroup",
+              names_from= c("cell_type", "phenotype","samples"),
+              values_from= "sum_subgroup_reads") %>%
+  mutate(across(colnames(.)[-1], ~replace_na(.x,0))) %>% 
+  rename(X= v_subgroup)
+write_csv(v_subgroup_reads, paste0(data_path, "raw_v_subgroup_reads.csv"))
+
+## J genes
+j_reads <- vj_reads %>% 
+  select(-v_gene, -v_subgroup) %>% 
+  group_by(j_gene, samples) %>%
+  mutate(sum_gene_reads= sum(reads)) %>% 
+  ungroup()
+
+j_gene_reads <- j_reads %>% 
+  distinct(j_gene, cell_type, phenotype, samples, sum_gene_reads) %>% 
+  pivot_wider(id_cols= "j_gene",
+              names_from= c("cell_type","phenotype","samples"),
+              values_from= "sum_gene_reads") %>% 
+  mutate(across(colnames(.)[-1], ~replace_na(.x,0))) %>% 
+  rename(X= j_gene)
+write_csv(j_gene_reads, paste0(data_path, "raw_j_gene_reads.csv"))
+```
+
+
+There aren't many 0's for any group, so using TMM by default. 
+
+```{r, echo= TRUE}
+data_path= "/stor/work/Ehrlich/mouse_TCRseq/data/gene_usage/"
+overlap_threshold = 0
+count_threshold   = 0
+logFC_threshold   = 0 ## log2(4)
+```
+
+## V gene edgeR Differential Expression
+```{r}
+v_gene_reads_path= paste0(data_path, "raw_v_gene_reads.csv")
+Treg_v_gene_DE <- broad_DE_wrapper(
+  data_path       = v_gene_reads_path,
+  group1          = "Treg_WT",
+  group2          = "Treg_CCR4KO",
+  filt_method     = "none",
+  counts          = count_threshold, 
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM", ## This data is sparser. Try both TMM and TMMwsp.
+  TCRlen_filt     = FALSE 
+) 
+
+Tconv_v_gene_DE <- broad_DE_wrapper(
+  data_path       = v_gene_reads_path,
+  group1          = "Tconv_WT",
+  group2          = "Tconv_CCR4KO",
+  filt_method     = "none",
+  counts          = count_threshold, 
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM", ## This data is sparser. Try both TMM and TMMwsp.
+  TCRlen_filt     = FALSE 
+) 
+```
+
+## V gene subgroup edgeR Differential Expression
+```{r}
+v_subgroup_reads_path= paste0(data_path, "raw_v_subgroup_reads.csv")
+Treg_v_subgroup_DE <- broad_DE_wrapper(
+  data_path       = v_subgroup_reads_path,
+  group1          = "Treg_WT",
+  group2          = "Treg_CCR4KO",
+  filt_method     = "none",
+  counts          = count_threshold,
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM",
+  TCRlen_filt     = FALSE
+) 
+
+Tconv_v_subgroup_DE <- broad_DE_wrapper(
+  data_path       = v_subgroup_reads_path,
+  group1          = "Tconv_WT",
+  group2          = "Tconv_CCR4KO",
+  filt_method     = "none",
+  counts          = count_threshold,
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM",
+  TCRlen_filt     = FALSE
+) 
+```
+
+## J gene edgeR Differential Expression
+```{r}
+j_gene_reads_path= paste0(data_path, "raw_j_gene_reads.csv")
+Treg_j_gene_DE <- broad_DE_wrapper(
+  data_path       = j_gene_reads_path,
+  group1          = "Treg_WT",
+  group2          = "Treg_CCR4KO",
+  filt_method     = "none",
+  counts          = count_threshold,
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM",
+  TCRlen_filt     = FALSE
+) 
+
+Tconv_j_gene_DE <- broad_DE_wrapper(
+  data_path       = j_gene_reads_path,
+  group1          = "Tconv_WT",
+  group2          = "Tconv_CCR4KO",
+  filt_method     = "none",
+  counts          = count_threshold,
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM",
+  TCRlen_filt     = FALSE
+) 
+
+## Proof that it works? 
+Tconv_j_gene_DE <- broad_DE_wrapper(
+  data_path       = v_subgroup_reads_path,
+  group1          = "Tconv_CCR4KO",
+  group2          = "Treg_WT",
+  filt_method     = "none",
+  counts          = count_threshold,
+  overlap         = overlap_threshold, 
+  logFC_threshold = logFC_threshold,
+  lib_norm        = "TMM",
+  TCRlen_filt     = FALSE
+)
+```
+
+
+## Comparing normalized reads with wilcox
+```{r}
+raw_reads_norm <- function(df, lib_norm= "TMM"){
+  if(!"X" %in% colnames(df)){
+    stop("CDR3 aa column must be names 'X'")
+  }
+  X <- as.character(df$X)
+  group <- factor(gsub("(_Thy_)?\\d$|_s_\\d+","", colnames(df[-1])))
+  y <- DGEList(df[,-1], group= group, genes= df[,1,drop=FALSE]) 
+  y <- calcNormFactors(y, method= lib_norm)
+  norm_reads <- cbind(X, as.data.frame(cpm(y)))
+  
+  return(norm_reads)
+}
+```
+
+```{r}
+j_gene_reads <- read_csv(j_gene_reads_path, show_col_types= FALSE)
+j_gene_reads <- raw_reads_norm(j_gene_reads)
+
+v_gene_reads <- read_csv(v_gene_reads_path, show_col_types= FALSE)
+v_gene_reads <- raw_reads_norm(v_gene_reads)
+
+v_subgroup_reads <- read_csv(v_subgroup_reads_path, show_col_types= FALSE)
+v_subgroup_reads <- raw_reads_norm(v_subgroup_reads)
+```
+
+### V Gene Wilcox
+```{r}
+Tconv_v_wilcox <- widyr_wilcox(df= v_gene_reads, group1= "Tconv_CCR4KO", group2= "Tconv_WT") 
+Treg_v_wilcox  <- widyr_wilcox(df= v_gene_reads, group1= "Treg_CCR4KO",  group2= "Treg_WT")
+
+table(Tconv_v_wilcox, useNA = "always")
+table(Treg_v_wilcox , useNA = "always")
+```
+
+### V Subgroup Wilcox
+```{r}
+Tconv_v_sub_wilcox <- widyr_wilcox(df= v_subgroup_reads, group1= "Tconv_CCR4KO", group2= "Tconv_WT")
+Treg_v_sub_wilcox  <- widyr_wilcox(df= v_subgroup_reads, group1= "Treg_CCR4KO",  group2= "Treg_WT")
+
+table(Tconv_v_sub_wilcox, useNA = "always")
+table(Treg_v_sub_wilcox , useNA = "always")
+```
+
+### J Gene Wilcox
+```{r}
+Tconv_j_wilcox <- widyr_wilcox(df= j_gene_reads, group1= "Tconv_CCR4KO", group2= "Tconv_WT")
+Treg_j_wilcox  <- widyr_wilcox(df= j_gene_reads, group1= "Treg_CCR4KO",  group2= "Treg_WT")
+
+table(Tconv_j_wilcox, useNA = "always")
+table(Treg_j_wilcox , useNA = "always")
+```
+

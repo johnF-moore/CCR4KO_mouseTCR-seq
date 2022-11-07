@@ -1,0 +1,189 @@
+---
+title: "Testing TMM vs TMMwsp Normalization"
+format: html
+editor: visual
+---
+
+```{r setup, include= FALSE}
+knitr::opts_chunk$set(echo = F, fig.dim= c(14,10))
+library(ggplot2)
+library(dplyr)
+library(here)
+library(readr)
+library(edgeR)
+library(patchwork)
+```
+
+```{r}
+perry_pablo_path= here("data/data_from_other_papers/Perry_2014",
+                       "Perry_pablo_aa_counts.csv")
+perry_pablo <- read_csv(perry_pablo_path, show_col_types = FALSE)
+
+lev_pablo_path= here("data/filt_TCR_data/leventhal_2016_wCCR4.csv")
+lev_pablo <- read_csv(lev_pablo_path, show_col_types = FALSE)
+```
+
+```{r}
+lib_norm_plots <- function(df,group1, group2, overlap, counts,log2_count, lib_norm, filt_method,
+                 aa_len_min= 7, aa_len_max= 17, TCRlen_filt= TRUE){
+  if(!"X" %in% colnames(df)){
+    stop("CDR3 aa column must be names 'X'")
+  }
+  
+  groups_df <- df %>% dplyr::select(X, contains(group1), contains(group2))
+    
+  ## Making other_df for adding back to the output df
+  other_df <- df[,!grepl(paste0(group1, "|", group2),colnames(df))]
+  colnames(other_df)[-1] <- paste0(colnames(other_df)[-1], "_raw")
+   
+  groups_df$X <- as.character(groups_df$X)
+    ## Where X is the CDR3 alpha aa sequencess 
+    ## and each column of reads contains the cell type in the sample name/column name
+  if(TCRlen_filt){
+    groups_df <- groups_df[nchar(groups_df$X) > aa_len_min & 
+                           nchar(groups_df$X) < aa_len_max,]
+      ## Filtering for sequences that make biological sense.
+  }
+
+  ## cpm normalization for filtering samples
+  cpm1 <- as.data.frame(cpm(y= groups_df[-1]))
+  counts <- counts/1e6
+  
+  if(filt_method == "phenotypewise"){
+    groups_df <- groups_df[(rowSums(dplyr::select(cpm1, contains(group1)) >= counts) >= overlap |
+                            rowSums(dplyr::select(cpm1, contains(group2)) >= counts) >= overlap),]
+    ## CDR3 aa will always be 1st column b/c of dplyr::select above.
+  } else if(filt_method == "IMPACC") {
+    groups_df <- groups_df[rowSums(groups_df[-1] > 0) >= overlap,]
+  } else if(filt_method == "AvgLogCPM"){
+    groups_df <- groups_df[aveLogCPM(y= groups_df[-1]) > log2_count &
+                           rowSums(groups_df[-1] > 0)  >= overlap,]
+  } else if(filt_method == "by_cellType"){
+    groups_df <- groups_df[rowSums(cpm1 >= counts) >= overlap,]
+    ## Filtering by expression in the cell type rather than by condition.
+  } else if(filt_method == "none"){
+    warning("No Filtering Done")
+  }
+  
+  overlap_df <- data.frame(X=groups_df$X,
+                           num_cellType= rowSums(groups_df[-1] > 0)) 
+  #### DE Data Prep ####
+  group <- factor(gsub("(_Thy_)?\\d+$|_s_\\d+","", colnames(groups_df[-1])))
+  
+  y <- DGEList(groups_df[,-1], group=group,
+               genes=groups_df[,1,drop=FALSE]) 
+  options(digits=3) 
+  
+  ## Making design matrix
+  design <- model.matrix(~0+group)
+  colnames(design) <- gsub(group1, "1", gsub(group2, "2", colnames(design)))
+  
+  #/ naive CPMs, corrected only for library size:
+  cpm_by_group_raw <- edgeR::cpmByGroup(y, log=TRUE) %>% 
+    as.data.frame() %>% 
+    mutate(avg_log= rowSums(.)/ncol(.))
+  cpm_by_group_raw$logFC <- cpm_by_group_raw[,1, drop=TRUE] - cpm_by_group_raw[,2, drop=TRUE]
+  
+  raw_plot <- ggplot(cpm_by_group_raw) +
+    aes(x= avg_log, y= logFC) + 
+    geom_density_2d() + 
+    geom_point(alpha= 0.5) +
+    geom_smooth(se= FALSE) +
+    geom_hline(yintercept = 0, color= "red") + 
+    ggtitle(paste0(group1, " vs. ", group2, " w/ cpm only"))
+  
+  #/ and with the TMMs, corrected for composition:
+  y <- calcNormFactors(y, method= lib_norm)
+  cpm_by_group_norm <- cpmByGroup(y, log=TRUE) %>% 
+    as.data.frame() %>% 
+    mutate(avg_log= rowSums(.)/ncol(.))
+  cpm_by_group_norm$logFC <- cpm_by_group_norm[,1, drop=TRUE] - cpm_by_group_norm[,2, drop=TRUE]
+  
+  norm_plot <- ggplot(cpm_by_group_norm) + 
+    aes(x= avg_log, y= logFC) +
+    geom_density_2d() +
+    geom_point(alpha= 0.5) + 
+    geom_smooth(se= FALSE) + 
+    geom_hline(yintercept = 0, color= "red") + 
+    ggtitle(paste0(group1, " vs. ", group2, " w/ ", lib_norm))
+  
+  plot(raw_plot + norm_plot)
+}
+```
+
+## Treg
+
+```{r}
+lib_norm_plots(df= lev_pablo, group1= "TregWT", group2= "TregCCR4KO", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMM")
+
+lib_norm_plots(df= lev_pablo, group1= "TregWT", group2= "TregCCR4KO", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMMwsp")
+```
+
+## Tconv
+```{r}
+lib_norm_plots(df= lev_pablo, group1= "TconvWT", group2= "TconvCCR4KO", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMM")
+
+lib_norm_plots(df= lev_pablo, group1= "TconvWT", group2= "TconvCCR4KO", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMMwsp")
+```
+
+
+## Batf3
+```{r}
+lib_norm_plots(df= lev_pablo, group1= "Batf3_pos", group2= "Batf3_neg", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMM")
+
+lib_norm_plots(df= lev_pablo, group1= "Batf3_pos", group2= "Batf3_neg", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMMwsp")
+
+lib_norm_plots(df= lev_pablo, group1= "Batf3_pos", group2= "TregWT", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMM")
+lib_norm_plots(df= lev_pablo, group1= "Batf3_pos", group2= "TregWT", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMMwsp")
+```
+
+
+## Perry
+```{r}
+lib_norm_plots(df= perry_pablo, group1= "WT_TREG", group2= "TregWT", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMM")
+
+lib_norm_plots(df= perry_pablo, group1= "WT_TCONV", group2= "TconvWT", counts= 10, overlap= 3,
+               log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMMwsp")
+
+# perry_aa <- here("data/data_from_other_papers/Perry_2014/Perry_aa_counts.csv") %>% 
+#   read_csv(show_col_types = FALSE)
+## I'm not sure what comparison to make for the Perry data within its data.
+perry <- perry_pablo %>% 
+  select(-contains("Treg", ignore.case = FALSE), -contains("Tconv", ignore.case = FALSE)) 
+perry <-  perry[rowSums(perry[-1]) > 0,]
+
+wCDRs <- read_csv(here("data/filt_TCR_data/samplewise_wCDRs.csv"), show_col_types= FALSE)
+table(perry$X %in% wCDRs$X)
+```
+The Perry plots look weird because there are no overlapping TCRs between our data and theirs b/c the iRepertoire and TRUST4 TCR formatting is different. Unless, they use different CDR3 definitions.
+
+**While TMMwsp should be better for sparse data, I think TMM does a better job of centering the data. I think either way it could be an issue that we have low counts.**
+
+I think the v pattern is the result of a log fold change between a specific read level and zero counts that's why it's linear and forming a minimum line.
+
+**Regardless, I need to look into using DESeq2 library size normalization. I also need to figure out what the clear v pattern means for this plot.**
+
+ATpoint refers to these plots as MA-plots when you're looking for how to interpret them.
+```{r}
+perry$X 
+## The Perry data has YFC on the beginning and F on the end still
+unique(substr(perry$X, start= 1, stop=3))
+  ## There are multiple beginning sequences. 
+  ## Really what I want is to match up until the first CASS
+unique(substr(perry$X, start= nchar(perry$X)-1, stop= nchar(perry$X)))
+
+wCDRs$X
+table(substr(wCDRs$X, start= 1,stop= 1))
+```
+
+
+

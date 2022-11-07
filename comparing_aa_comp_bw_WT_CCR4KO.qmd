@@ -1,0 +1,817 @@
+---
+title: "Comparing amino acid composition by position between WT & CCR4KO TCRs"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r, message= F, warning= F}
+#| echo: false
+knitr::opts_chunk$set(echo = F)
+library(pheatmap)
+library(here)
+library(data.table)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+```
+
+```{r}
+##----------
+# Functions 
+##----------
+PWM_list_to_df= function(PWMs){ ## Where PWMs is a nested list 
+  for(i in 1:length(PWMs)){
+    pheno.list= PWMs[[i]]
+    CDR3_lens= as.numeric(names(pheno.list))
+    
+    for(j in 1:length(pheno.list)){
+      pheno.list[[j]]$CDR3_len= CDR3_lens[j]
+      pheno.list[[j]]= pheno.list[[j]] %>% 
+        pivot_wider(names_from= aa, values_from= prop) %>% 
+        as.data.frame()
+    }
+    
+  PWMs[[i]]= do.call(rbind, pheno.list)
+  PWMs[[i]]$phenotype= names(PWMs)[i]
+  
+  }
+  PWMs= do.call(rbind, PWMs)
+
+return(PWMs)
+}
+
+
+fisher_test_pvalue= function(df, isSim, repeats){
+  if(!is.data.frame(df)){ 
+    df= as.data.frame(df)
+  } 
+  if(sum(rowSums(df, na.rm= T) > 0) == 0){
+    return(NA)
+      ## Position does not exist for that length
+  } else if(sum(colSums(df, na.rm= T) > 0) < 2){
+    message(paste0("Too few colums w/ values greater than 0.",
+                   "\n Skipping this matrix. Putting value of -99."))
+    return(-99L)
+  } else if(any(is.na(df))){
+    return(NA)
+  } else{
+    p_val= fisher.test(df, simulate.p.value= isSim, B= repeats)$p.value
+      ## monte carlo simulates p-value b/c not a 2x2 table for fisher's exact test
+    return(p_val)
+  }
+}
+
+
+PWM_fisher_test= function(df, x_val, y_val, p_method, repeats){
+  ## Input df should only have phenotypes that you want to compare 
+    ## i.e. only treg_WT and treg_CCR4KO
+  ## The only columns besides x_val and y_val should be the columns intended 
+  ## for the fisher test (presumably some flavor of amino acid)
+  ## I assume that the PWM has decimals, so I multiply by 100
+  if(!is.character(x_val)){
+    message("x_val is not a character vec, converting")
+    x_val= as.character(x_val)
+  } 
+  if(!is.character(y_val)){
+    message("y_val is not a character vec, converting")
+    y_val= as.character(y_val)
+  }
+  
+  df$tmp_x= as.character(df[[x_val]])
+  df$tmp_y= as.character(df[[y_val]])
+  
+  ## Making output df
+  x_vals= unique(df$tmp_x)
+  y_vals= unique(df$tmp_y)
+  fisher_df= as.data.frame(matrix(nrow= length(x_vals), ncol= length(y_vals)))
+  dimnames(fisher_df)= list(x_vals, y_vals)
+  
+  for(x in x_vals){
+    subX_df= df %>% filter(tmp_x == x) 
+    for(y in y_vals){
+      subXY_df= subX_df %>% filter(tmp_y == y)  
+
+      ## Fisher Test
+      subXY_mat= subXY_df %>% 
+        select(-contains(x_val),-contains(y_val), -contains("tmp")) %>%
+          ## removing columns that shouldn't be in fisher's exact test
+        as.matrix()
+      subXY_mat= round(subXY_mat*100)
+
+      fisher_df[x,y]= fisher_test_pvalue(subXY_mat,
+                                         isSim= T, 
+                                         repeats= repeats)
+        ## doing fisher's exact test w/ some other return values 
+        ## to handle my edge cases.
+    }
+  }
+  nTests= sum(!is.na(fisher_df))
+    ## calculating number of tests that were valid for p-value correction
+  fisher_df= apply(fisher_df, 2, FUN= p.adjust, method= "holm", n= nTests)
+      ## Adjusting p_value
+  return(fisher_df)
+}
+
+
+diff_HM= function(df, filt, fill){
+  df$tmp= df[[fill]]
+  p= df %>% 
+  ## Note: No filtering b/c used with nested pipeline
+  distinct(position, CDR3_len, tmp) %>% 
+  mutate(CDR3_len= as.factor(CDR3_len)) %>%
+  ggplot() + 
+    aes(x= position, y= CDR3_len, fill= tmp) + 
+    geom_tile(color= "white") + 
+    geom_text(aes(label= round(tmp,digits= 2))) +
+    scale_fill_viridis_c() +
+    scale_y_discrete(limits= rev) +
+    theme_minimal_grid() +
+    ggtitle(paste0(filt,": ", fill))
+  return(p)
+}
+```
+
+-   All of the original data here is generated from PWM of only the TCRs that have greater than logFC 2 enrichment in their group. One caveat is that I am including cells that dropout of the other group entirely and only have a logFC due to the pseudominimum.
+
+```{r}
+##----------
+# Loading PWM data & converting to fisher.test format
+##----------
+path= here("data", "PWM","PWM_CCR4_project.rds")
+aa_PWMs= readRDS(path)
+aa_PWMs= PWM_list_to_df(aa_PWMs)
+
+path= here("data", "PWM", "side_chain_PWM_CCR4.rds")
+side_chain_PWMs= readRDS(path)
+side_chain_PWMs= PWM_list_to_df(side_chain_PWMs)
+
+path= here("data", "PWM", "dennis_side_chain_PWM_CCR4.rds")
+alt_PWMs= readRDS(path)
+alt_PWMs= PWM_list_to_df(alt_PWMs)
+```
+
+```{r, message= F, warning= F}
+##--------------
+# Statistical significance b/w aa composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg Correction
+fisher_treg= aa_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= aa_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+```
+
+```{r, fig.dim= c(15,9)}
+##--------
+# Plotting aa composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg", "tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+    ## Using silent to avoid printing the graph
+    ## Indexing the pheatmap list to the 4th object selects only the gtable plot
+}
+
+## Plotting
+  ## (can't use patchwork b/c gtable objs, not ggplot objs)
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(10,10))
+```
+
+How to interpret the plots:
+
+-   1 is true, meaning statistically significant.
+
+-   0 is false, meaning not statistically significant.
+
+-   The NAs on the right of the graph have to do with the length of the TCRs.
+
+-   The NAs in the meat of the graph occur due to all of the aa being the same.
+
+I could also try the test on PWM that are generated w/o logFC filtering. I also need to think about the interpretation of these results. There are differences, but how useful are they for figuring out what is happening. Which positions drive changes? Are those positions conserved regardless of length? I don't think this PWM should be used to find a tconv TCR. Unless, we want to use a higher logFC filter, which might be acceptable, but there is still the big issue of the assumption that positions are independent.
+
+The different p-value correction methods do change the p-values, but they don't change which positions are significant. Interestingly, there are more significant positions in the tconv than treg TCRs, especially for the most abundant lengths like 10-12 amino acids. The opposite is true for tregs. I think the significance on the rarer lengths is probably due to lower N and the greater impact of each TCR. As far as interpretation of the Tconv graphs goes, if every position is significant, doesn't that mean that none of them are? We can say that there appears to be a population level differences between WT and CCR4KO, but I don't think we can say which amino acid positions drive that change or pull out any biological underpinnings driving the differences. It might be worth running this same analysis on the amino acid side chain PWMs after I turn this script into some nicer functions.
+
+## Side Chain Group Comparison
+
+```{r, warning= F, message= F}
+##--------------
+# Statistical significance b/w aa side chain group composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg
+fisher_treg= side_chain_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= side_chain_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+```
+
+```{r, fig.dim= c(15,9)}
+##--------
+# Plotting aa side chain group composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg","tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+    ## Using silent to avoid printing the graph
+    ## Indexing the pheatmap list to the 4th object selects only the gtable plot
+}
+
+## Plotting
+  ## (can't use patchwork b/c gtable objs, not ggplot objs)
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(10,10))
+```
+
+## Alternative Side Chain Group Comparison
+
+```{r, message= F, warning= F}
+##--------------
+# Statistical significance b/w aa alternative side chain group composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg Correction
+fisher_treg= alt_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= alt_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+```
+
+```{r, fig.dim= c(15,9)}
+##--------
+# Plotting aa side chain group composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg", "tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+    ## Using silent to avoid printing the graph
+    ## Indexing the pheatmap list to the 4th object selects only the gtable plot
+}
+
+## Plotting
+  ## (can't use patchwork b/c gtable objs, not ggplot objs)
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(14,14))
+```
+
+------------------------------------------------------------------------
+
+## Figuring out effect size of differences by position
+
+-   For this, I am going to calculate the median and maximum difference between the alternative amino acid side chain groupings.
+
+```{r}
+## Converting to tidy format
+tidy_aa= alt_PWMs %>% 
+  setDT() %>%
+  melt(id.vars= c("position","CDR3_len","phenotype"), 
+       variable.name= "aa", 
+       value.name= "prop") %>% 
+  as.data.frame()
+
+## Calculating difference in aa proportion b/w WT & KO for both cell types
+tidy_aa= tidy_aa %>% 
+  mutate(cell_type= gsub("_\\w+","", phenotype)) %>% 
+  group_by(position, CDR3_len, aa, cell_type) %>% 
+  mutate(pheno_diff= abs(diff(prop))) %>% 
+  group_by(position, CDR3_len, cell_type) %>%
+  mutate(med_diff= median(pheno_diff),
+         IQR_diff= IQR(pheno_diff),
+         max_diff= max(pheno_diff)) %>% 
+  ungroup()
+
+
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "med_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "max_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+```
+
+## Re-running with logFC \> 4
+
+```{r, fig.dim= c(15,9), message= F, warning= F}
+path= here("data", "PWM", "dennis_side_chain_PWM_CCR4_4logFC.rds")
+logFC4_PWMs= readRDS(path)
+logFC4_PWMs= PWM_list_to_df(logFC4_PWMs)
+
+##--------------
+# Statistical significance b/w aa composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg Correction
+fisher_treg= logFC4_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= logFC4_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+##--------
+# Plotting aa composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg", "tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+}
+
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(10,10))
+
+##------------
+# Calculating Effect Size of PWM
+##------------
+## Converting to tidy format
+tidy_aa= logFC4_PWMs %>% 
+  setDT() %>%
+  melt(id.vars= c("position","CDR3_len","phenotype"), 
+       variable.name= "aa", 
+       value.name= "prop") %>% 
+  as.data.frame()
+
+## Calculating difference in aa proportion b/w WT & KO for both cell types
+tidy_aa= tidy_aa %>% 
+  mutate(cell_type= gsub("_\\w+","", phenotype)) %>% 
+  group_by(position, CDR3_len, aa, cell_type) %>% 
+  mutate(pheno_diff= abs(diff(prop))) %>% 
+  group_by(position, CDR3_len, cell_type) %>%
+  mutate(med_diff= median(pheno_diff, na.rm= T),
+         IQR_diff= IQR(pheno_diff, na.rm= T),
+         max_diff= max(pheno_diff, na.rm= T)) %>% 
+  ungroup()
+
+
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "med_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "max_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+```
+
+## LogFC \> 4 Side Chain Analysis
+
+```{r, fig.dim= c(15,9), message= F, warning= F}
+path= here("data", "PWM", "side_chain_PWM_CCR4_4logFC.rds")
+side_chain_logFC4_PWMs= readRDS(path)
+side_chain_logFC4_PWMs= PWM_list_to_df(side_chain_logFC4_PWMs)
+
+##--------------
+# Statistical significance b/w aa composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg Correction
+fisher_treg= side_chain_logFC4_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= side_chain_logFC4_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+##--------
+# Plotting aa composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg", "tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+}
+
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(10,10))
+
+##------------
+# Calculating Effect Size of PWM
+##------------
+## Converting to tidy format
+tidy_aa= side_chain_logFC4_PWMs %>% 
+  setDT() %>%
+  melt(id.vars= c("position","CDR3_len","phenotype"), 
+       variable.name= "aa", 
+       value.name= "prop") %>% 
+  as.data.frame()
+
+## Calculating difference in aa proportion b/w WT & KO for both cell types
+tidy_aa= tidy_aa %>% 
+  mutate(cell_type= gsub("_\\w+","", phenotype)) %>% 
+  group_by(position, CDR3_len, aa, cell_type) %>% 
+  mutate(pheno_diff= abs(diff(prop))) %>% 
+  group_by(position, CDR3_len, cell_type) %>%
+  mutate(med_diff= median(pheno_diff, na.rm= T),
+         IQR_diff= IQR(pheno_diff, na.rm= T),
+         max_diff= max(pheno_diff, na.rm= T)) %>% 
+  ungroup()
+
+
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "med_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "max_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+```
+
+## Re-running without any filtering
+
+```{r, fig.dim= c(15,9), message= F, warning= F}
+path= here("data", "PWM", "dennis_side_chain_PWM_CCR4_0logFC.rds")
+logFC0_PWMs= readRDS(path)
+logFC0_PWMs= PWM_list_to_df(logFC0_PWMs)
+
+##--------------
+# Statistical significance b/w aa composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg Correction
+fisher_treg= logFC0_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= logFC0_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+##--------
+# Plotting aa composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg", "tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+}
+
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(10,10))
+
+##------------
+# Calculating Effect Size of PWM
+##------------
+## Converting to tidy format
+tidy_aa= logFC0_PWMs %>% 
+  setDT() %>%
+  melt(id.vars= c("position","CDR3_len","phenotype"), 
+       variable.name= "aa", 
+       value.name= "prop") %>% 
+  as.data.frame()
+
+## Calculating difference in aa proportion b/w WT & KO for both cell types
+tidy_aa= tidy_aa %>% 
+  mutate(cell_type= gsub("_\\w+","", phenotype)) %>% 
+  group_by(position, CDR3_len, aa, cell_type) %>% 
+  mutate(pheno_diff= abs(diff(prop))) %>% 
+  group_by(position, CDR3_len, cell_type) %>%
+  mutate(med_diff= median(pheno_diff, na.rm= T),
+         IQR_diff= IQR(pheno_diff, na.rm= T),
+         max_diff= max(pheno_diff, na.rm= T)) %>% 
+  ungroup()
+
+
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "med_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "max_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+```
+
+## LogFC == 0 Side Chain Analysis
+
+```{r, fig.dim= c(15,9), message= F, warning= F}
+path= here("data", "PWM", "side_chain_PWM_CCR4_0logFC.rds")
+side_chain_logFC0_PWMs= readRDS(path)
+side_chain_logFC0_PWMs= PWM_list_to_df(side_chain_logFC0_PWMs)
+
+##--------------
+# Statistical significance b/w aa composition by position
+##--------------
+replications= 2000
+
+## Benjamini-Hochberg Correction
+fisher_treg= side_chain_logFC0_PWMs %>% 
+  filter(phenotype %in% c("treg_WT", "treg_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+fisher_tconv= side_chain_logFC0_PWMs %>% 
+  filter(phenotype %in% c("tconv_WT", "tconv_CCR4KO")) %>%
+  select(-phenotype) %>% 
+  PWM_fisher_test(x_val= "CDR3_len", 
+                  y_val= "position", 
+                  p_method= "BH",
+                  repeats= replications)
+
+##--------
+# Plotting aa composition comparisons
+##--------
+fisher.data= list(fisher_treg, fisher_tconv)
+plot.data= lapply(fisher.data, 
+                  FUN= function(x){ifelse(x == -99, NA, ifelse(x < 0.05, 1, 0))})
+  ## Binning p-values to 1, 0, NA
+names(plot.data)= c("treg", "tconv")
+
+## Generating heatmaps
+plot.list= vector(mode= "list", length= length(plot.data))
+for(i in 1:length(plot.list)){
+  l= plot.data[[i]]
+  plot.list[[i]]= pheatmap(mat= l, 
+                           cluster_rows= F, 
+                           cluster_cols= F, 
+                           main = names(plot.data)[i],
+                           silent = T,
+                           angle_col = 0,
+                           fontsize = 15)[[4]]
+}
+
+grid.arrange(plot.list[[1]], plot.list[[2]],
+             nrow= 1,
+             ncol= 2,
+             heights= 9,
+             widths= c(10,10))
+
+##------------
+# Calculating Effect Size of PWM
+##------------
+## Converting to tidy format
+tidy_aa= side_chain_logFC0_PWMs %>% 
+  setDT() %>%
+  melt(id.vars= c("position","CDR3_len","phenotype"), 
+       variable.name= "aa", 
+       value.name= "prop") %>% 
+  as.data.frame()
+
+## Calculating difference in aa proportion b/w WT & KO for both cell types
+tidy_aa= tidy_aa %>% 
+  mutate(cell_type= gsub("_\\w+","", phenotype)) %>% 
+  group_by(position, CDR3_len, aa, cell_type) %>% 
+  mutate(pheno_diff= abs(diff(prop))) %>% 
+  group_by(position, CDR3_len, cell_type) %>%
+  mutate(med_diff= median(pheno_diff, na.rm= T),
+         IQR_diff= IQR(pheno_diff, na.rm= T),
+         max_diff= max(pheno_diff, na.rm= T)) %>% 
+  ungroup()
+
+
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "med_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+
+tidy_aa %>%
+  nest(data = -cell_type) %>% 
+  mutate(plots = pmap(list(data, cell_type, "max_diff"), diff_HM)) %>%
+  pull(plots) %>%
+  walk(print)
+```
+
+<!-- OLD CODE -->
+
+```{r, message= F, warning= F, eval= F}
+
+##--------------
+# Statistical significance b/w aa composition by position
+##--------------
+
+
+## Running statistical test
+for(len in unique(PWMs$CDR3_len)){
+  len_PWM= PWMs %>% filter(CDR3_len == len) 
+  pos= 1
+  while(pos <= len){
+    pos_len_PWM= len_PWM %>% filter(grepl(as.character(pos), position))  
+    pos_index= as.character(unique(pos_len_PWM$position))
+    len_index= as.character(unique(pos_len_PWM$CDR3_len))
+    ## treg Comparisons 
+    treg_input= pos_len_PWM %>% 
+      filter(phenotype %in% c("treg_WT","treg_CCR4KO")) %>% 
+      select(-position, -CDR3_len, -phenotype) %>% 
+      as.matrix()
+    treg_input= round(treg_input*100)
+
+    fisher_treg_holm[len_index, pos_index]= fisher_test_pvalue(treg_input, 
+                                                          isSim= T, 
+                                                          repeats= replications,
+                                                          p_adjustment= 184)
+    fisher_treg_BH[len_index, pos_index]= fisher_test_pvalue(treg_input, 
+                                                          isSim= T, 
+                                                          repeats= replications,
+                                                          p_adjustment= 184,
+                                                          p.method = "BH")
+      ## p_adjustment is the total number of tests b/w fisher_treg & fisher_tconv
+    
+    ## tconv Comparisons 
+    tconv_input= pos_len_PWM %>% 
+      filter(phenotype %in% c("tconv_WT","tconv_CCR4KO")) %>%
+      select(-position, -CDR3_len, -phenotype) %>% 
+      as.matrix()
+    tconv_input= round(tconv_input*100)
+    fisher_tconv_holm[len_index, pos_index]= fisher_test_pvalue(tconv_input, 
+                                                           isSim= T, 
+                                                           repeats= replications,
+                                                           p_adjustment = 184)
+    fisher_tconv_BH[len_index, pos_index]= fisher_test_pvalue(tconv_input, 
+                                                           isSim= T, 
+                                                           repeats= replications,
+                                                           p_adjustment = 184,
+                                                           p.method= "BH")
+    pos= pos + 1
+  }
+}
+```
