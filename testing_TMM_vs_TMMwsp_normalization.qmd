@@ -4,6 +4,8 @@ format: html
 editor: visual
 ---
 
+Comparing the edgeR differential expression normalization methods trimmed mean of M-values (TMM) and trimmed mean of M-values with singleton pairing (TMMwsp)
+
 ```{r setup, include= FALSE}
 knitr::opts_chunk$set(echo = F, fig.dim= c(14,10))
 library(ggplot2)
@@ -26,6 +28,7 @@ lev_pablo <- read_csv(lev_pablo_path, show_col_types = FALSE)
 ```{r}
 lib_norm_plots <- function(df,group1, group2, overlap, counts,log2_count, lib_norm, filt_method,
                  aa_len_min= 7, aa_len_max= 17, TCRlen_filt= TRUE){
+  ## This is a plotting wrapper that does the normalization and produces the figure to make the code more organized.
   if(!"X" %in% colnames(df)){
     stop("CDR3 aa column must be names 'X'")
   }
@@ -53,6 +56,7 @@ lib_norm_plots <- function(df,group1, group2, overlap, counts,log2_count, lib_no
     groups_df <- groups_df[(rowSums(dplyr::select(cpm1, contains(group1)) >= counts) >= overlap |
                             rowSums(dplyr::select(cpm1, contains(group2)) >= counts) >= overlap),]
     ## CDR3 aa will always be 1st column b/c of dplyr::select above.
+    ## Only keeping genes that appear in n (overlap) samples with m reads (counts)
   } else if(filt_method == "IMPACC") {
     groups_df <- groups_df[rowSums(groups_df[-1] > 0) >= overlap,]
   } else if(filt_method == "AvgLogCPM"){
@@ -78,7 +82,7 @@ lib_norm_plots <- function(df,group1, group2, overlap, counts,log2_count, lib_no
   design <- model.matrix(~0+group)
   colnames(design) <- gsub(group1, "1", gsub(group2, "2", colnames(design)))
   
-  #/ naive CPMs, corrected only for library size:
+  ## Without library normalization
   cpm_by_group_raw <- edgeR::cpmByGroup(y, log=TRUE) %>% 
     as.data.frame() %>% 
     mutate(avg_log= rowSums(.)/ncol(.))
@@ -92,7 +96,7 @@ lib_norm_plots <- function(df,group1, group2, overlap, counts,log2_count, lib_no
     geom_hline(yintercept = 0, color= "red") + 
     ggtitle(paste0(group1, " vs. ", group2, " w/ cpm only"))
   
-  #/ and with the TMMs, corrected for composition:
+  ## Using library normalization
   y <- calcNormFactors(y, method= lib_norm)
   cpm_by_group_norm <- cpmByGroup(y, log=TRUE) %>% 
     as.data.frame() %>% 
@@ -107,7 +111,8 @@ lib_norm_plots <- function(df,group1, group2, overlap, counts,log2_count, lib_no
     geom_hline(yintercept = 0, color= "red") + 
     ggtitle(paste0(group1, " vs. ", group2, " w/ ", lib_norm))
   
-  plot(raw_plot + norm_plot)
+  plot(raw_plot + norm_plot) 
+  ## patchwork of plots to compare side by side
 }
 ```
 
@@ -130,6 +135,7 @@ lib_norm_plots(df= lev_pablo, group1= "TconvWT", group2= "TconvCCR4KO", counts= 
                log2_count= log2(2), filt_method="phenotypewise", lib_norm= "TMMwsp")
 ```
 
+I also checked how the normalization performed on published data sets that use the same mouse model (Batf3) or similar mouse model (Perry).
 
 ## Batf3
 ```{r}
@@ -164,26 +170,4 @@ perry <-  perry[rowSums(perry[-1]) > 0,]
 wCDRs <- read_csv(here("data/filt_TCR_data/samplewise_wCDRs.csv"), show_col_types= FALSE)
 table(perry$X %in% wCDRs$X)
 ```
-The Perry plots look weird because there are no overlapping TCRs between our data and theirs b/c the iRepertoire and TRUST4 TCR formatting is different. Unless, they use different CDR3 definitions.
-
-**While TMMwsp should be better for sparse data, I think TMM does a better job of centering the data. I think either way it could be an issue that we have low counts.**
-
-I think the v pattern is the result of a log fold change between a specific read level and zero counts that's why it's linear and forming a minimum line.
-
-**Regardless, I need to look into using DESeq2 library size normalization. I also need to figure out what the clear v pattern means for this plot.**
-
-ATpoint refers to these plots as MA-plots when you're looking for how to interpret them.
-```{r}
-perry$X 
-## The Perry data has YFC on the beginning and F on the end still
-unique(substr(perry$X, start= 1, stop=3))
-  ## There are multiple beginning sequences. 
-  ## Really what I want is to match up until the first CASS
-unique(substr(perry$X, start= nchar(perry$X)-1, stop= nchar(perry$X)))
-
-wCDRs$X
-table(substr(wCDRs$X, start= 1,stop= 1))
-```
-
-
 
