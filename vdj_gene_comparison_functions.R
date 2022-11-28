@@ -5,9 +5,10 @@ library(tibble)
 library(tidyr)
 
 ##-------
-# VDJ gene comparison functions for Pablo's mouse TCR-seq project
+# VDJ gene comparison functions for CCR4 mouse TCR-seq project
 ##-------
 get_gene_usage= function(dir_path, md_path, gene= "V"){
+  ## Takes iRepertoire raw sequencing data and produces combined data frame of gene usage for all samples
   dirs_out= list.dirs(dir_path, full.names= FALSE, recursive= FALSE)
   
   out_list0= vector('list', length= length(dirs_out))
@@ -48,6 +49,7 @@ get_gene_usage= function(dir_path, md_path, gene= "V"){
 }
 
 score_gene_usage <- function(df, new_name, group_cols="gene", score_col= "score"){
+  ## Flexible function to score gene usage across groups
   new_name= sym(new_name)
   df <- df %>% 
     group_by(across(all_of(group_cols))) %>% 
@@ -77,6 +79,7 @@ fisher_data_prep <- function(df, gene_col, names_from, values_from){
 
 lfc <- function(df, split_col, constant_col, score_col,
                 constant_val, pseudo_zero= 1e-6){
+  ## Log fold change function for working with formatted differential gene expression data
   uni_split= paste0("log_score_", unique(df[,split_col, drop= TRUE]))
   
   if(length(uni_split) != 2){
@@ -147,6 +150,7 @@ widyr_fisher <- function(df, group1, group2){
 }
 
 get_gene_reads= function(dir_path, md_path){
+  ## Gets all of the raw data that we need for differential expression from all TCR-seq samples 
   dirs_out= list.dirs(dir_path, full.names= FALSE, recursive= FALSE)
   
   out_list= vector('list', length= length(dirs_out))
