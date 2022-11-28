@@ -14,6 +14,9 @@ source(paste0("/stor/work/Ehrlich/Users/John/projects/mouse_TCRseq/",
               "scripts/john_analysis/VDJ_usage/",
               "vdj_gene_comparison_functions.R"))
 ```
+This script takes VJ gene usage and compares them between CCR4-knockout and wild-type mice using wilcoxon rank sum test and Fisher's Exact Test.
+
+I wrote some functions to use statistical tests with my formatted wide data called widyr_fisher() and widyr_wilcox(). The code for these is in vdj_gene_comparison_functions.R. 
 
 ## Loading Data 
 ```{r}
@@ -44,6 +47,7 @@ table(Tconv_v_wilcox, useNA = "always")
 fisher_v <- fisher_data_prep(df= norm_v, gene_col= "gene",
                              names_from= c("samples","phenotype","cell_type"), 
                              values_from= "score")
+  ## Function to convert the normalized data to work with widyr_fisher() from another project.
 
 Treg_v_fisher  <- widyr_fisher(df= fisher_v, group1= "WT_Treg",  group2= "CCR4KO_Treg")
 Tconv_v_fisher <- widyr_fisher(df= fisher_v, group1= "WT_Tconv", group2= "CCR4KO_Tconv")
