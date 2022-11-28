@@ -22,6 +22,7 @@ library(gridExtra)
 # Functions 
 ##----------
 PWM_list_to_df= function(PWMs){ ## Where PWMs is a nested list 
+  ## converts position weight matrix (PWM) to a df for use with tidyverse
   for(i in 1:length(PWMs)){
     pheno.list= PWMs[[i]]
     CDR3_lens= as.numeric(names(pheno.list))
@@ -220,9 +221,6 @@ How to interpret the plots:
 
 -   The NAs in the meat of the graph occur due to all of the aa being the same.
 
-I could also try the test on PWM that are generated w/o logFC filtering. I also need to think about the interpretation of these results. There are differences, but how useful are they for figuring out what is happening. Which positions drive changes? Are those positions conserved regardless of length? I don't think this PWM should be used to find a tconv TCR. Unless, we want to use a higher logFC filter, which might be acceptable, but there is still the big issue of the assumption that positions are independent.
-
-The different p-value correction methods do change the p-values, but they don't change which positions are significant. Interestingly, there are more significant positions in the tconv than treg TCRs, especially for the most abundant lengths like 10-12 amino acids. The opposite is true for tregs. I think the significance on the rarer lengths is probably due to lower N and the greater impact of each TCR. As far as interpretation of the Tconv graphs goes, if every position is significant, doesn't that mean that none of them are? We can say that there appears to be a population level differences between WT and CCR4KO, but I don't think we can say which amino acid positions drive that change or pull out any biological underpinnings driving the differences. It might be worth running this same analysis on the amino acid side chain PWMs after I turn this script into some nicer functions.
 
 ## Side Chain Group Comparison
 
